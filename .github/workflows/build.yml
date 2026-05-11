@@ -9,19 +9,11 @@ on:
         type: choice
         options:
           - "samloader"
-          - "direct_link"
-          - "google_drive"
-        default: "samloader"
-      UPLOAD_METHOD:
-        description: "Choose where to upload the final ROM"
-        required: true
-        type: choice
-        options:
-          - "github"
+          - "direct"
           - "gdrive"
-        default: "gdrive"
+        default: "samloader"
       TELEGRAM_DESTINATION:
-        description: "Release type (GDrive only)"
+        description: "Release type"
         required: true
         type: choice
         options:
@@ -30,10 +22,16 @@ on:
           - "silent"
         default: "private"
       FIRMWARE_DIRECT_LINK:
-        description: "Direct firmware link or Google Drive FILE_ID (only google_drive, direct_link)"
+        description: "Direct firmware link or Google Drive FILE_ID (only direct link, google drive)"
+        required: false
+      BASE_DEVICE_MODEL:
+        description: "Base device model (ROM Base)"
+        required: false
+      SAMLOADER_CSC_IMEI:
+        description: "CSC/IMEI e.g. EUX/000000000 (only samloader)"
         required: false
       TARGET_DEVICE_MODEL:
-        description: "TARGET_DEVICE_MODEL"
+        description: "Target device model"
         required: true
         default: "SM-"
       USE_UI_8_TETHERING_APEX:
@@ -44,16 +42,6 @@ on:
           - "True"
           - "False"
         default: "False"
-      BASE_DEVICE_MODEL:
-        description: "BASE_DEVICE_MODEL (needed for all)"
-        required: true
-        default: "SM-"
-      BASE_DEVICE_CSC:
-        description: "BASE_DEVICE_CSC (only samloader)"
-        required: false
-      BASE_DEVICE_IMEI:
-        description: "BASE_DEVICE_IMEI (only samloader)"
-        required: false
       OUTPUT_FILESYSTEM:
         description: "OUTPUT_FILESYSTEM."
         required: true
@@ -86,64 +74,48 @@ jobs:
         run: |
           bash setup.sh
 
+      - name: Check inputs
+        run: |
+          SAMLOADER_CSC_IMEI="${{ github.event.inputs.SAMLOADER_CSC_IMEI }}"
+
+          if [[ "${{ github.event.inputs.DOWNLOAD_METHOD }}" == "samloader" ]]; then
+            if [[ ! "$SAMLOADER_CSC_IMEI" =~ ^[^/]+/[^/]+$ ]]; then
+              echo "ERROR: SAMLOADER_CSC_IMEI must be in format CSC/IMEI"
+              exit 1
+            fi
+          fi
+
+          BASE_MODEL="${{ github.event.inputs.BASE_DEVICE_MODEL }}"
+          BASE_CSC=$(echo "$SAMLOADER_CSC_IMEI" | cut -d'/' -f1)
+          BASE_IMEI=$(echo "$SAMLOADER_CSC_IMEI" | cut -d'/' -f2)
+
+          echo "BASE_MODEL=$BASE_MODEL" >> $GITHUB_ENV
+          echo "BASE_CSC=$BASE_CSC"     >> $GITHUB_ENV
+          echo "BASE_IMEI=$BASE_IMEI"   >> $GITHUB_ENV
+
       - name: Download firmware
         run: |
           METHOD="${{ github.event.inputs.DOWNLOAD_METHOD }}"
-          if [ "$METHOD" = "direct_link" ]; then METHOD="direct"; fi
-          if [ "$METHOD" = "google_drive" ]; then METHOD="gdrive"; fi
+
+          LINK_OR_IMEI="${{ github.event.inputs.DOWNLOAD_METHOD == 'samloader' && env.BASE_IMEI || github.event.inputs.FIRMWARE_DIRECT_LINK }}"
 
           bash scripts/download.sh \
-            "${{ github.event.inputs.BASE_DEVICE_MODEL }}" \
+            "${{ env.BASE_MODEL }}" \
             "$METHOD" \
-            "${{ github.event.inputs.DOWNLOAD_METHOD == 'samloader' && github.event.inputs.BASE_DEVICE_IMEI || github.event.inputs.FIRMWARE_DIRECT_LINK }}" \
-            "${{ github.event.inputs.BASE_DEVICE_CSC }}"
+            "$LINK_OR_IMEI" \
+            "${{ env.BASE_CSC }}"
 
-      - name: Start Build Rom For ${{ github.event.inputs.TARGET_DEVICE_MODEL }}
+      - name: Start Build From ${{ github.event.inputs.BASE_DEVICE_MODEL }} To ${{ github.event.inputs.TARGET_DEVICE_MODEL }}
         run: |
           sudo bash sixteen.sh \
             "${{ github.event.inputs.TARGET_DEVICE_MODEL }}" \
             "${{ github.event.inputs.USE_UI_8_TETHERING_APEX }}" \
-            "${{ github.event.inputs.BASE_DEVICE_MODEL }}" \
-            "${{ github.event.inputs.BASE_DEVICE_CSC }}" \
-            "${{ github.event.inputs.BASE_DEVICE_IMEI }}" \
+            "${{ env.BASE_MODEL }}" \
+            "${{ env.BASE_CSC }}" \
+            "${{ env.BASE_IMEI }}" \
             "${{ github.event.inputs.OUTPUT_FILESYSTEM }}"
 
-      - name: Compress & Split files for GitHub
-        if: github.event.inputs.UPLOAD_METHOD == 'github'
-        run: |
-          GIT_SUPPORT_SIZE=2147483647
-          OUT_DIR="OUT"
-          echo "BUILD_TIME=$(TZ='Asia/Dhaka' date '+%Y-%m-%d %I:%M:%S %p UTC+6')" >> $GITHUB_ENV
-
-          for file in "$OUT_DIR"/*; do
-            [ -f "$file" ] || continue
-            FILE_SIZE=$(stat -c%s "$file")
-            if [ "$FILE_SIZE" -gt "$GIT_SUPPORT_SIZE" ]; then
-              sudo split -b "$GIT_SUPPORT_SIZE" -d -a 3 "$file" "$file.part"
-              sudo rm -f "$file"
-            fi
-          done
-
-      - name: Upload to GitHub Release
-        if: github.event.inputs.UPLOAD_METHOD == 'github'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "build-${{ github.run_id }}"
-          name: "${{ github.event.inputs.BASE_DEVICE_MODEL }} Base For ${{ github.event.inputs.TARGET_DEVICE_MODEL }}"
-          body: |
-            Build Information
-            - Build For: ${{ github.event.inputs.TARGET_DEVICE_MODEL }}
-            - Build From: ${{ github.event.inputs.BASE_DEVICE_MODEL }}
-            - Build Time: ${{ env.BUILD_TIME }}
-            - Build ID: ${{ github.run_id }}
-            - Download Method: ${{ github.event.inputs.DOWNLOAD_METHOD }}
-          files: |
-            OUT/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GIT_TOKEN }}
-
       - name: Compress and Upload to Google Drive
-        if: github.event.inputs.UPLOAD_METHOD == 'gdrive'
         run: |
           OUT_DIR="OUT"
           VERSION=$(cat version.txt | tr -d '[:space:]')
@@ -151,5 +123,5 @@ jobs:
           ZIP_PATH="$OUT_DIR/$ZIP_NAME"
 
           cp core/etc/read.txt "$OUT_DIR"
-          7z a -t7z "$ZIP_PATH" ./"$OUT_DIR"/* -mx=1
+          7z a -t7z "$ZIP_PATH" ./"$OUT_DIR"/* -mx=9
           bash upload.sh "$ZIP_PATH" "${{ github.event.inputs.TELEGRAM_DESTINATION }}"
