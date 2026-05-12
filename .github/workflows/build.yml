@@ -24,16 +24,17 @@ on:
       FIRMWARE_DIRECT_LINK:
         description: "Direct firmware link or Google Drive FILE_ID (only direct link, google drive)"
         required: false
-      BASE_DEVICE_MODEL:
-        description: "Base device model (ROM Base)"
-        required: false
-      SAMLOADER_CSC_IMEI:
-        description: "CSC/IMEI e.g. EUX/000000000 (only samloader)"
-        required: false
       TARGET_DEVICE_MODEL:
         description: "Target device model"
         required: true
         default: "SM-"
+      BASE_DEVICE_MODEL:
+        description: "Base device model (ROM Base)"
+        required: true
+        default: "SM-"
+      SAMLOADER_CSC_IMEI:
+        description: "CSC/IMEI e.g. EUX/000000000 (only samloader)"
+        required: false
       USE_UI_8_TETHERING_APEX:
         description: "Set True if your kernel BPF version is 5.4 (lower than 5.10)."
         required: true
@@ -119,9 +120,9 @@ jobs:
         run: |
           OUT_DIR="OUT"
           VERSION=$(cat version.txt | tr -d '[:space:]')
-          ZIP_NAME="CoreProject_V${VERSION}_${{ github.event.inputs.TARGET_DEVICE_MODEL }}.7z"
-          ZIP_PATH="$OUT_DIR/$ZIP_NAME"
+          DATE=$(date +'%Y-%m-%d')
+          ZIP_NAME="CoreUI_V${VERSION}_${DATE}.7z"
 
-          cp core/etc/read.txt "$OUT_DIR"
+          ZIP_PATH="$OUT_DIR/$ZIP_NAME"
           7z a -t7z "$ZIP_PATH" ./"$OUT_DIR"/* -mx=9
           bash upload.sh "$ZIP_PATH" "${{ github.event.inputs.TELEGRAM_DESTINATION }}"
